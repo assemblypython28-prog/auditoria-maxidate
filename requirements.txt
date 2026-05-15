@@ -1,8 +1,7 @@
+
 streamlit
 streamlit-gsheets-connection
 pandas
 openpyxl
 easyocr
 opencv-python-headless
-numpy
-Pillow
