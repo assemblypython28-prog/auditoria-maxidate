@@ -1,4 +1,5 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import easyocr
 import numpy as np
@@ -6,94 +7,137 @@ import time
 import io
 from PIL import Image
 
-# --- 1. CONFIGURAÇÃO VISUAL E PWA ---
+# --- 1. CONFIGURAÇÃO VISUAL "ESTEL ENTERPRISE" ---
 st.set_page_config(page_title="Estel Asset Manager", page_icon="🏗️", layout="wide")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #f4f7f9; }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3.5em; background-color: #1b4f72; color: white; font-weight: bold; border: none; }
-    .stButton>button:hover { background-color: #2874a6; }
-    .stTabs [aria-selected="true"] { background-color: #1b4f72 !important; color: white !important; }
-    .metric-card { background-color: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-left: 5px solid #1b4f72; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+        background-color: #F8FAFC;
+    }
+
+    /* Botões Padrão Comercial */
+    .stButton>button {
+        width: 100%;
+        border-radius: 8px;
+        height: 48px;
+        background-color: #1E293B;
+        color: white;
+        font-weight: 600;
+        border: none;
+        transition: 0.3s ease;
+    }
+    .stButton>button:hover {
+        background-color: #334155;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    /* Cards de Dashboard */
+    .metric-card {
+        background: white;
+        padding: 24px;
+        border-radius: 16px;
+        border: 1px solid #E2E8F0;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+    }
+
+    /* Estilização das Abas */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: #F1F5F9;
+        padding: 8px;
+        border-radius: 12px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #FFFFFF !important;
+        color: #1E293B !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CARREGAMENTO DA IA ---
+# --- 2. CONEXÃO E LÓGICA DE PERSISTÊNCIA ---
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+def normalizar_codigo(codigo):
+    if pd.isna(codigo) or codigo == "": return ""
+    return str(codigo).split('-')[0].lstrip('0')
+
+@st.cache_data(ttl=10)
+def carregar_da_nuvem():
+    try:
+        df = conn.read()
+        if df.empty or len(df.columns) < 2: 
+            return None
+        # Garante que a coluna Status exista e cria chave de busca
+        if 'Status' not in df.columns: df['Status'] = 'Pendente'
+        df['Chave_Busca'] = df['Código do Bem'].astype(str).apply(normalizar_codigo)
+        return df
+    except:
+        return None
+
+# Inicializa o estado do banco de dados
+if 'db' not in st.session_state:
+    st.session_state.db = carregar_da_nuvem()
+
+# --- 3. MOTOR DE INTELIGÊNCIA ARTIFICIAL ---
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'], gpu=False)
 
 reader = load_ocr()
 
-# --- 3. FUNÇÕES DE SUPORTE ---
-def normalizar_codigo(codigo):
-    if pd.isna(codigo) or codigo == "": return ""
-    return str(codigo).split('-')[0].lstrip('0')
+# --- 4. INTERFACE PRINCIPAL ---
+st.markdown('<h1 style="color: #0F172A; font-weight: 800; letter-spacing: -1px;">🏗️ Auditoria de Ativos Estel</h1>', unsafe_allow_html=True)
 
-# --- 4. GESTÃO DE ESTADO ---
-if 'db' not in st.session_state:
-    st.session_state.db = None
-if 'contabilizados' not in st.session_state:
-    st.session_state.contabilizados = set()
-if 'splash_done' not in st.session_state:
-    st.session_state.splash_done = False
-
-# --- 5. SPLASH SCREEN ---
-if not st.session_state.splash_done:
-    placeholder = st.empty()
-    with placeholder.container():
-        st.markdown("""
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 80vh; background-image: linear-gradient(rgba(255,255,255,0.8), rgba(255,255,255,0.8)), url('https://images.unsplash.com/photo-1581092162384-8987c1d64718?q=80&w=1000'); background-size: cover;">
-                <h1 style="color: #1b4f72; font-family: sans-serif; font-size: 3em;">ESTEL</h1>
-                <h2 style="color: #566573;">Asset Management & Auditoria</h2>
-                <p>Carregando módulos de visão computacional...</p>
-            </div>
-            """, unsafe_allow_html=True)
-        time.sleep(3)
-    st.session_state.splash_done = True
-    st.rerun()
-
-# --- 6. INTERFACE PRINCIPAL ---
-st.title("🏗️ Asset Management Estel")
-
+# FLUXO A: IMPORTAÇÃO (Se estiver vazio)
 if st.session_state.db is None:
-    st.subheader("📥 Carga Inicial de Dados")
-    st.info("Para começar, faça o upload da planilha de inventário (CPBE118).")
-    arquivo = st.file_uploader("Arraste a planilha Adami aqui", type=['xlsx'])
+    st.markdown("""
+        <div style="background: white; padding: 40px; border-radius: 16px; border: 1px dashed #CBD5E1; text-align: center; margin-top: 20px;">
+            <h3 style="color: #1E293B;">Nenhum inventário ativo na nuvem</h3>
+            <p style="color: #64748B;">Importe o arquivo Excel (CPBE118) para iniciar o monitoramento.</p>
+        </div>
+    """, unsafe_allow_html=True)
     
+    arquivo = st.file_uploader("", type=['xlsx'])
     if arquivo:
-        df = pd.read_excel(arquivo)
-        df.columns = df.columns.str.strip()
-        # Garante que as colunas essenciais existem ou cria se necessário
-        for col in ['Código do Bem', 'Descrição do Bem', 'Valor Original', 'Valor Total', 'Depreciação Acumulada']:
-            if col not in df.columns:
-                df[col] = 0 if 'Valor' in col or 'Depr' in col else ""
-        
-        df = df.dropna(subset=['Código do Bem'])
-        df['Chave_Busca'] = df['Código do Bem'].apply(normalizar_codigo)
-        st.session_state.db = df
-        st.success("Base de dados integrada!")
-        st.rerun()
-else:
-    tab_scan, tab_lista, tab_dash = st.tabs(["📸 SCANNER & BUSCA", "📋 LISTA DE BENS", "📊 RELATÓRIO"])
+        with st.spinner('Sincronizando base com a nuvem...'):
+            df = pd.read_excel(arquivo)
+            df.columns = df.columns.str.strip()
+            if 'Status' not in df.columns: df['Status'] = 'Pendente'
+            
+            # Normalização e Sincronização Inicial
+            df['Chave_Busca'] = df['Código do Bem'].astype(str).apply(normalizar_codigo)
+            conn.update(data=df.drop(columns=['Chave_Busca']))
+            st.session_state.db = df
+            st.success("Base Estel carregada e protegida na nuvem!")
+            time.sleep(1.5)
+            st.rerun()
 
-    # --- ABA 1: SCANNER & CADASTRO ---
+# FLUXO B: OPERAÇÃO (Se já houver dados)
+else:
+    tab_scan, tab_lista, tab_dash = st.tabs(["🔍 SCANNER IA", "📑 LISTA DE CONFERÊNCIA", "📊 DASHBOARD & EXPORT"])
+
+    # --- ABA 1: SCANNER ---
     with tab_scan:
-        st.subheader("Localizar Ativo")
-        foto = st.camera_input("Scanner de Etiqueta")
-        
+        foto = st.camera_input("Capturar etiqueta de patrimônio")
         id_detectado = ""
+        
         if foto:
-            with st.spinner('IA Analisando imagem...'):
+            with st.spinner('IA analisando...'):
                 img = Image.open(foto)
                 results = reader.readtext(np.array(img))
                 nums = ["".join(filter(str.isdigit, t)) for (_, t, _) in results if "".join(filter(str.isdigit, t))]
                 if nums:
                     id_detectado = nums[0]
-                    st.success(f"Deteção Automática: {id_detectado}")
+                    st.toast(f"Código detectado: {id_detectado}")
 
-        busca = st.text_input("Digite ou confirme o número do bem:", value=id_detectado)
+        busca = st.text_input("Número para busca ou cadastro:", value=id_detectado, placeholder="Digite o ID...")
 
         if busca:
             alvo = busca.lstrip('0')
@@ -103,83 +147,85 @@ else:
                 idx = item_data.index[0]
                 with st.container(border=True):
                     st.markdown(f"### {item_data.at[idx, 'Descrição do Bem']}")
-                    st.write(f"**Código Completo:** {item_data.at[idx, 'Código do Bem']}")
+                    st.write(f"Código: **{item_data.at[idx, 'Código do Bem']}**")
+                    st.write(f"Status Atual: `{item_data.at[idx, 'Status']}`")
                     
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("V. Original", f"R$ {item_data.at[idx, 'Valor Original']:,.2f}")
-                    c2.metric("V. Total", f"R$ {item_data.at[idx, 'Valor Total']:,.2f}")
-                    c3.metric("Depreciação", f"R$ {item_data.at[idx, 'Depreciação Acumulada']:,.2f}")
-
-                    if st.button("✅ CONFIRMAR PRESENÇA"):
-                        st.session_state.contabilizados.add(alvo)
-                        st.success(f"Item {alvo} marcado como presente!")
+                    if st.button("✅ CONFIRMAR ITEM NO LOCAL"):
+                        # Atualiza Local e Nuvem
+                        st.session_state.db.at[idx, 'Status'] = 'Auditado'
+                        conn.update(data=st.session_state.db.drop(columns=['Chave_Busca']))
+                        st.success("Auditado com sucesso na nuvem!")
                         time.sleep(0.5)
                         st.rerun()
             else:
-                # FORMULÁRIO DE CADASTRO COMPLETO (SOBRA DE INVENTÁRIO)
-                st.warning("⚠️ Número não encontrado na base de dados.")
-                with st.expander("➕ CADASTRAR NOVO ITEM (SOBRA)", expanded=True):
-                    with st.form("form_sobra_completo"):
-                        st.write("Preencha os campos para incluir este bem no inventário:")
-                        f_cod = st.text_input("Código do Bem", value=busca)
-                        f_desc = st.text_input("Descrição do Bem")
-                        col_a, col_b, col_c = st.columns(3)
-                        f_orig = col_a.number_input("Valor Original", min_value=0.0, format="%.2f")
-                        f_total = col_b.number_input("Valor Total", min_value=0.0, format="%.2f")
-                        f_depr = col_c.number_input("Depreciação Acumulada", min_value=0.0, format="%.2f")
-                        
-                        if st.form_submit_button("💾 SALVAR E CONFIRMAR"):
-                            novo_item = pd.DataFrame([{
-                                'Código do Bem': f_cod,
+                st.warning("⚠️ Ativo não localizado na base original.")
+                with st.expander("➕ CADASTRAR COMO SOBRA DE INVENTÁRIO", expanded=True):
+                    with st.form("form_sobra"):
+                        f_desc = st.text_input("Descrição da Sobra")
+                        f_area = st.text_input("Localização/Área")
+                        if st.form_submit_button("SALVAR E AUDITAR"):
+                            nova_sobra = pd.DataFrame([{
+                                'Código do Bem': busca,
                                 'Descrição do Bem': f"[SOBRA] {f_desc}",
-                                'Valor Original': f_orig,
-                                'Valor Total': f_total,
-                                'Depreciação Acumulada': f_depr,
-                                'Chave_Busca': f_cod.lstrip('0')
+                                'Status': 'Auditado',
+                                'Chave_Busca': alvo
                             }])
-                            st.session_state.db = pd.concat([st.session_state.db, novo_item], ignore_index=True)
-                            st.session_state.contabilizados.add(f_cod.lstrip('0'))
-                            st.success("Novo item cadastrado e auditado!")
+                            st.session_state.db = pd.concat([st.session_state.db, nova_sobra], ignore_index=True)
+                            conn.update(data=st.session_state.db.drop(columns=['Chave_Busca']))
+                            st.success("Sobra registrada na nuvem!")
                             time.sleep(1)
                             st.rerun()
 
     # --- ABA 2: LISTA ---
     with tab_lista:
-        st.subheader("Status do Inventário")
+        st.markdown("### Itens Pendentes / Auditados")
         df_view = st.session_state.db.copy()
-        df_view['Status'] = df_view['Chave_Busca'].apply(lambda x: '✅ OK' if x in st.session_state.contabilizados else '⚠️ PENDENTE')
+        filtro = st.radio("Filtro rápido:", ["Todos", "Pendente", "Auditado"], horizontal=True)
+        if filtro != "Todos":
+            df_view = df_view[df_view['Status'] == filtro]
         
-        # Filtros rápidos
-        filtro = st.radio("Filtrar por:", ["Todos", "Pendentes", "Auditados"], horizontal=True)
-        if filtro == "Pendentes":
-            df_view = df_view[df_view['Status'] == '⚠️ PENDENTE']
-        elif filtro == "Auditados":
-            df_view = df_view[df_view['Status'] == '✅ OK']
-
-        st.dataframe(df_view[['Código do Bem', 'Descrição do Bem', 'Status', 'Valor Total']], use_container_width=True, hide_index=True)
+        st.dataframe(df_view[['Código do Bem', 'Descrição do Bem', 'Status']], use_container_width=True, hide_index=True)
 
     # --- ABA 3: DASHBOARD ---
     with tab_dash:
         total = len(st.session_state.db)
-        encontrados = len(st.session_state.contabilizados)
-        perc = (encontrados / total * 100) if total > 0 else 0
+        audit = len(st.session_state.db[st.session_state.db['Status'] == 'Auditado'])
+        perc = (audit/total*100) if total > 0 else 0
         
-        c_m1, c_m2 = st.columns(2)
-        with c_m1:
-            st.markdown(f'<div class="metric-card"><h2>{encontrados} / {total}</h2><p>Auditados</p></div>', unsafe_allow_html=True)
-        with c_m2:
-            st.markdown(f'<div class="metric-card"><h2>{perc:.1f}%</h2><p>Conclusão</p></div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f'<div class="metric-card"><h2 style="margin:0;">{audit} / {total}</h2><p style="margin:0; color:#64748B;">ITENS AUDITADOS</p></div>', unsafe_allow_html=True)
+        with c2:
+            st.markdown(f'<div class="metric-card"><h2 style="margin:0;">{perc:.1f}%</h2><p style="margin:0; color:#64748B;">PROGRESSO TOTAL</p></div>', unsafe_allow_html=True)
         
+        st.markdown("<br>", unsafe_allow_html=True)
         st.progress(perc / 100)
         
         st.divider()
-        st.subheader("Extração de Dados")
+        st.subheader("💾 Gerenciamento de Dados")
+        
+        # Preparação do Excel para Download
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_view.to_excel(writer, index=False)
-        st.download_button("📥 BAIXAR EXCEL ATUALIZADO", output.getvalue(), "relatorio_final_estel.xlsx")
+            st.session_state.db.drop(columns=['Chave_Busca']).to_excel(writer, index=False)
         
-        if st.button("🛑 REINICIAR PROCESSO (Limpar tudo)"):
-            st.session_state.db = None
-            st.session_state.contabilizados = set()
-            st.rerun()
+        col_d1, col_d2 = st.columns(2)
+        
+        with col_d1:
+            st.download_button(
+                label="📥 BAIXAR RELATÓRIO PARCIAL",
+                data=output.getvalue(),
+                file_name=f"Auditoria_Estel_{time.strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Faz o download dos dados atuais sem limpar a nuvem."
+            )
+            
+        with col_d2:
+            if st.button("🚨 ENCERRAR INVENTÁRIO (LIMPAR NUVEM)"):
+                # Limpeza da planilha Google para o próximo projeto
+                df_reset = pd.DataFrame(columns=['Código do Bem', 'Descrição do Bem', 'Status'])
+                conn.update(data=df_reset)
+                st.session_state.db = None
+                st.success("Dados de nuvem resetados com sucesso!")
+                time.sleep(2)
+                st.rerun()
