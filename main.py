@@ -2,93 +2,127 @@ import streamlit as st
 import pandas as pd
 import easyocr
 import numpy as np
-import cv2
-from PIL import Image
+import time
 import io
+from PIL import Image
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Inventário Estel AI", page_icon="🔍", layout="centered")
+# --- 1. CONFIGURAÇÃO DA PÁGINA (PWA) ---
+st.set_page_config(page_title="Inventário Estel", page_icon="🏗️", layout="centered")
 
-# Estilo para botões grandes (fácil de clicar no tablet)
-st.markdown("""
-    <style>
-    .stButton>button { width: 100%; border-radius: 10px; height: 3.5em; font-weight: bold; background-color: #007bff; color: white; }
-    .stMetric { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- 2. SPLASH SCREEN PROFISSIONAL ---
+if 'splash_done' not in st.session_state:
+    placeholder = st.empty()
+    with placeholder.container():
+        st.markdown(
+            """
+            <style>
+            .splash-bg {
+                background-image: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), 
+                                  url('https://images.unsplash.com/photo-1581092160562-40aa08e78837?q=80&w=2070');
+                background-size: cover;
+                background-position: center;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                color: white;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                z-index: 9999;
+            }
+            .loader {
+                border: 8px solid #f3f3f3;
+                border-top: 8px solid #3498db;
+                border-radius: 50%;
+                width: 60px;
+                height: 60px;
+                animation: spin 1s linear infinite;
+                margin-bottom: 20px;
+            }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+            .fade-in { animation: fadeIn 2s; }
+            @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+            </style>
+            <div class="splash-bg">
+                <div class="loader"></div>
+                <h1 class="fade-in">SISTEMA DE INVENTÁRIO</h1>
+                <h3 class="fade-in" style="font-weight: 300;">Manutenção e Mecânica Estel</h3>
+                <p class="fade-in">Carregando Inteligência Artificial de Visão...</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        time.sleep(4)  # Tempo da animação de abertura
+    placeholder.empty()
+    st.session_state.splash_done = True
 
+# --- 3. CARREGAMENTO DA IA (EASYOCR) ---
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'], gpu=False)
 
 reader = load_ocr()
 
-# --- FUNÇÕES DE APOIO ---
+# --- 4. FUNÇÕES DE APOIO ---
 def normalizar_codigo(codigo):
     if pd.isna(codigo) or codigo == "": return ""
     return str(codigo).split('-')[0].lstrip('0')
 
-# --- ESTADO DO APP ---
+# --- 5. ESTADO DO APP E INTERFACE ---
 if 'db' not in st.session_state:
     st.session_state.db = None
 if 'contabilizados' not in st.session_state:
     st.session_state.contabilizados = set()
 
-st.title("📋 Inventário Estel")
+st.title("🏗️ Gestão de Ativos")
 
-# --- 1. SEÇÃO DE IMPORTAÇÃO (AGORA NA TELA PRINCIPAL) ---
+# --- SEÇÃO DE IMPORTAÇÃO (VISÍVEL SE NÃO HOUVER DADOS) ---
 if st.session_state.db is None:
-    st.info("👋 Bem-vindo! Primeiro, importe sua planilha de bens.")
-    arquivo_excel = st.file_uploader("Clique aqui para selecionar o Excel (CPBE118)", type=['xlsx', 'csv'])
+    st.markdown("### 📥 Iniciar Novo Inventário")
+    arquivo = st.file_uploader("Selecione a planilha Excel (CPBE118)", type=['xlsx'])
     
-    if arquivo_excel:
-        df_base = pd.read_excel(arquivo_excel) if arquivo_excel.name.endswith('xlsx') else pd.read_csv(arquivo_excel)
-        df_base.columns = df_base.columns.str.strip()
-        
-        # Limpeza para focar nos dados reais da Adami
-        df_base = df_base.dropna(subset=['Código do Bem'])
-        df_base['Chave_Busca'] = df_base['Código do Bem'].apply(normalizar_codigo)
-        
-        st.session_state.db = df_base
-        st.success("Planilha carregada com sucesso! O scanner foi liberado.")
+    if arquivo:
+        df = pd.read_excel(arquivo)
+        df.columns = df.columns.str.strip()
+        # Filtra linhas válidas e prepara busca
+        df = df.dropna(subset=['Código do Bem'])
+        df['Chave_Busca'] = df['Código do Bem'].apply(normalizar_codigo)
+        st.session_state.db = df
+        st.success("Base Adami carregada com sucesso!")
         st.rerun()
 
-# --- 2. FLUXO DE INVENTÁRIO (SÓ APARECE APÓS IMPORTAR) ---
+# --- SEÇÃO DE OPERAÇÃO (APÓS IMPORTAR) ---
 else:
-    # Botão para resetar/trocar planilha
-    if st.button("🔄 Trocar Planilha / Limpar Dados"):
-        st.session_state.db = None
-        st.session_state.contabilizados = set()
-        st.rerun()
-
-    st.divider()
-
-    # Dashboard de Progresso
+    # Cabeçalho com métricas
     total = len(st.session_state.db)
     encontrados = len(st.session_state.contabilizados)
     perc = (encontrados / total * 100) if total > 0 else 0
     
-    c1, c2 = st.columns(2)
-    c1.metric("Itens Totais", total)
-    c2.metric("Concluído", f"{perc:.1f}%")
+    col1, col2, col3 = st.columns([1,1,1])
+    col1.metric("Total", total)
+    col2.metric("Encontrados", encontrados)
+    col3.metric("Progresso", f"{perc:.1f}%")
     st.progress(perc / 100)
 
     # Scanner IA
-    st.subheader("📸 Scanner de Etiqueta")
-    foto = st.camera_input("Tire a foto da etiqueta")
+    st.subheader("📸 Scanner de Patrimônio")
+    foto = st.camera_input("Fotografar etiqueta")
     
     id_detectado = ""
     if foto:
-        with st.spinner('IA lendo número...'):
+        with st.spinner('IA analisando etiqueta...'):
             img = Image.open(foto)
             results = reader.readtext(np.array(img))
             nums = ["".join(filter(str.isdigit, t)) for (_, t, _) in results if "".join(filter(str.isdigit, t))]
             if nums:
                 id_detectado = nums[0]
-                st.success(f"🤖 IA Identificou: {id_detectado}")
+                st.success(f"🤖 Identificado: {id_detectado}")
 
-    # Busca e Confirmação
-    busca = st.text_input("Confirme o Número (Ex: 333):", value=id_detectado)
+    busca = st.text_input("Número do Patrimônio:", value=id_detectado)
 
     if busca:
         alvo = busca.lstrip('0')
@@ -104,31 +138,27 @@ else:
                 v_depr = item.at[idx, 'Depreciação Acumulada']
                 st.info(f"💰 Valor Líquido: R$ {v_orig - v_depr:,.2f}")
 
-                if st.button("✅ Confirmar Localização"):
+                if st.button("✅ Confirmar"):
                     st.session_state.contabilizados.add(alvo)
-                    st.toast(f"Item {alvo} marcado!")
                     st.rerun()
         else:
-            st.error("Número não encontrado no Excel.")
-            if st.button("➕ Cadastrar como Novo"):
-                with st.form("novo_cad"):
-                    st.write("Novo Cadastro")
-                    nc1 = st.text_input("Cód", value=busca)
-                    nc2 = st.text_input("Descrição")
-                    if st.form_submit_button("Salvar"):
-                        st.success("Salvo!")
+            st.error("Item não localizado.")
 
+    # Exportação e Reset
     st.divider()
+    c_exp, c_res = st.columns(2)
     
-    # Exportação (Sempre visível no final)
-    if encontrados > 0:
-        st.subheader("📤 Finalizar")
+    with c_exp:
         df_out = st.session_state.db.copy()
-        df_out['Status_Inventario'] = df_out['Chave_Busca'].apply(
-            lambda x: 'CONTABILIZADO' if x in st.session_state.contabilizados else 'PENDENTE'
-        )
+        df_out['Status'] = df_out['Chave_Busca'].apply(lambda x: 'OK' if x in st.session_state.contabilizados else 'PENDENTE')
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_out.to_excel(writer, index=False)
-        st.download_button("📥 Baixar Excel Atualizado", output.getvalue(), "inventario_final.xlsx")
-
+        st.download_button("📥 Baixar Relatório", output.getvalue(), "inventario.xlsx")
+        
+    with c_res:
+        if st.button("⚠️ Reiniciar App"):
+            st.session_state.db = None
+            st.session_state.contabilizados = set()
+            st.session_state.splash_done = None
+            st.rerun()
