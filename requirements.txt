@@ -1,4 +1,0 @@
-streamlit
-streamlit-gsheets-connection
-pandas
-open
