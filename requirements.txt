@@ -1,7 +1,5 @@
-streamlit==1.28.0
-git+https://github.com/streamlit/gsheets-connection
+streamlit
+st-gsheets-connection
 pandas
 openpyxl
 Pillow
-easyocr
-opencv-python-headless
