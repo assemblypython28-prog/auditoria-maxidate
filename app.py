@@ -1,21 +1,19 @@
-import streamlit as st
+codigo_tesseract = r'''import streamlit as st
 import pandas as pd
 import time
 import io
 import re
 from PIL import Image
-import numpy as np
-from rapidocr_onnxruntime import RapidOCR
 from supabase import create_client, Client
 
 # ============================================================
-# INICIALIZACAO DO OCR (uma unica vez)
+# TENTA IMPORTAR TESSERACT (OCR)
 # ============================================================
-@st.cache_resource
-def iniciar_ocr():
-    return RapidOCR()
-
-ocr_engine = iniciar_ocr()
+try:
+    import pytesseract
+    TESSERACT_DISPONIVEL = True
+except ImportError:
+    TESSERACT_DISPONIVEL = False
 
 # ============================================================
 # CONFIGURACAO SUPABASE
@@ -38,7 +36,7 @@ def carregar_do_supabase(obra_id="default"):
         dados = response.data
         if not dados:
             return pd.DataFrame(columns=["Codigo do Bem", "Descricao do Bem", "Status", "Data Auditoria", "Observacoes"])
-
+        
         df = pd.DataFrame(dados)
         df = df.rename(columns={
             "codigo": "Codigo do Bem",
@@ -57,7 +55,7 @@ def salvar_item_supabase(codigo, descricao, status="Pendente", data_aud="", obs=
     """Salva ou atualiza um item no Supabase."""
     try:
         response = supabase.table("inventario").select("id").eq("codigo", str(codigo)).eq("obra_id", obra_id).execute()
-
+        
         if response.data:
             supabase.table("inventario").update({
                 "status": status,
@@ -88,36 +86,41 @@ def deletar_obra(obra_id):
         return False
 
 # ============================================================
-# FUNCOES DE OCR
+# FUNCOES DE OCR (TESSERACT)
 # ============================================================
-def extrair_codigo_ocr(textos):
+def extrair_codigo_ocr(texto):
     """Extrai o codigo do patrimonio do texto OCR."""
-    texto_completo = " ".join(textos).upper().replace(" ", "").replace("-", "")
-
+    texto_limpo = texto.upper().replace(" ", "").replace("-", "")
+    
     padroes = [
         r"CPBE\d{3}(\d{3,6})",
         r"(\d{6,8})",
         r"(\d{3,6})",
     ]
-
+    
     for padrao in padroes:
-        match = re.search(padrao, texto_completo)
+        match = re.search(padrao, texto_limpo)
         if match:
             return match.group(1).lstrip("0")
-
-    numeros = re.findall(r"\d+", texto_completo)
+    
+    numeros = re.findall(r"\d+", texto_limpo)
     if numeros:
         return max(numeros, key=len).lstrip("0")
-
+    
     return None
 
 def executar_ocr(imagem):
-    """Executa OCR em uma imagem PIL."""
-    img_array = np.array(imagem)
-    result, _ = ocr_engine(img_array)
-    if result:
-        return [r[1] for r in result]
-    return []
+    """Executa OCR em uma imagem PIL usando Tesseract."""
+    if not TESSERACT_DISPONIVEL:
+        return ""
+    try:
+        # Configura Tesseract para numeros e letras maiusculas
+        config = "--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-"
+        texto = pytesseract.image_to_string(imagem, config=config)
+        return texto.strip()
+    except Exception as e:
+        st.error(f"Erro no OCR: {e}")
+        return ""
 
 # ============================================================
 # FUNCOES AUXILIARES
@@ -133,16 +136,16 @@ def limpar_excel(df_raw):
     if "Codigo do Bem" not in df_raw.columns:
         df_raw.columns = df_raw.iloc[0]
         df_raw = df_raw.iloc[1:].reset_index(drop=True)
-
+    
     df_raw = df_raw[df_raw["Codigo do Bem"].astype(str).str.match(r"^\d{3,}", na=False)].copy()
     df_raw = df_raw[df_raw["Descricao do Bem"].notna()].copy()
     df_raw = df_raw[df_raw["Descricao do Bem"].astype(str).str.strip() != ""].copy()
     df_raw = df_raw[~df_raw["Descricao do Bem"].astype(str).str.contains("Estel Servicos", na=False)].copy()
     df_raw["Codigo do Bem"] = df_raw["Codigo do Bem"].astype(str).str.strip()
-
+    
     colunas_manter = ["Codigo do Bem", "Descricao do Bem"]
     df_clean = df_raw[colunas_manter].copy()
-
+    
     return df_clean
 
 def exportar_excel(df):
@@ -156,7 +159,7 @@ def exportar_excel(df):
 # ============================================================
 # CONFIGURACAO VISUAL
 # ============================================================
-st.set_page_config(page_title="Estel Asset Manager", page_icon="🏗", layout="wide")
+st.set_page_config(page_title="Estel Asset Manager", page_icon="📋", layout="wide")
 
 st.markdown("""
     <style>
@@ -180,29 +183,29 @@ st.markdown("<p style=\"color: #64748B; margin-bottom: 24px;\">Sistema de audito
 # Barra lateral
 with st.sidebar:
     st.markdown("### Identificacao da Obra")
-
+    
     try:
         obras_resp = supabase.table("inventario").select("obra_id").execute()
         obras_existentes = list(set([r["obra_id"] for r in obras_resp.data])) if obras_resp.data else []
     except:
         obras_existentes = []
-
+    
     obra_id = st.text_input(
         "ID da Obra:",
         value=st.session_state.get("obra_id", "obra_001"),
         help="Use um ID unico para cada obra"
     )
-
+    
     if obras_existentes:
         obra_selecionada = st.selectbox("Ou selecione obra existente:", [""] + obras_existentes)
         if obra_selecionada:
             obra_id = obra_selecionada
-
+    
     if obra_id != st.session_state.get("obra_id", ""):
         st.session_state.obra_id = obra_id
         st.session_state.db = carregar_do_supabase(obra_id)
         st.rerun()
-
+    
     st.markdown("---")
     st.markdown("### Importar Excel (CPBE118)")
     arquivo = st.file_uploader("Selecionar ficheiro", type=["xlsx", "xls"])
@@ -210,13 +213,13 @@ with st.sidebar:
         try:
             df_raw = pd.read_excel(arquivo, header=None)
             df_clean = limpar_excel(df_raw)
-
+            
             if df_clean.empty:
                 st.error("Nenhum item valido encontrado no Excel.")
             else:
                 progress_bar = st.progress(0)
                 total = len(df_clean)
-
+                
                 for i, (_, row) in enumerate(df_clean.iterrows()):
                     salvar_item_supabase(
                         row["Codigo do Bem"],
@@ -227,15 +230,15 @@ with st.sidebar:
                         obra_id
                     )
                     progress_bar.progress((i + 1) / total)
-
+                
                 st.session_state.db = carregar_do_supabase(obra_id)
                 st.success(f"{total} itens importados para obra: {obra_id}")
                 time.sleep(1)
                 st.rerun()
-
+                
         except Exception as e:
             st.error(f"Erro ao importar: {e}")
-
+    
     st.markdown("---")
     st.markdown("### Exportar Excel")
     df_atual = st.session_state.get("db", pd.DataFrame())
@@ -249,7 +252,7 @@ with st.sidebar:
         )
     else:
         st.info("Nenhum dado para exportar")
-
+    
     st.markdown("---")
     st.markdown("### Zona de Perigo")
     if st.button("Limpar Obra (Nova Obra)", type="secondary"):
@@ -258,7 +261,7 @@ with st.sidebar:
         st.success(f"Obra '{obra_id}' limpa!")
         time.sleep(1)
         st.rerun()
-
+    
     st.markdown("---")
     st.markdown("**Resumo**")
     df_stats = st.session_state.get("db", pd.DataFrame())
@@ -297,71 +300,77 @@ else:
     # ============================================================
     with tab1:
         st.markdown("### Captura da Etiqueta com OCR")
-        st.info("Dica: Aponte a camera para a etiqueta do patrimonio e tire a foto. O sistema le o codigo automaticamente.")
-
+        
+        if not TESSERACT_DISPONIVEL:
+            st.warning("OCR nao disponivel. Instale pytesseract para habilitar. Usando entrada manual.")
+        else:
+            st.info("Dica: Aponte a camera para a etiqueta do patrimonio e tire a foto. O sistema le o codigo automaticamente.")
+        
         foto = st.camera_input("Aponte a camera para a etiqueta e clique em 'Take Photo'")
-
+        
         codigo_detectado = None
-
+        
         if foto is not None:
             col1, col2 = st.columns([1, 1])
-
+            
             with col1:
                 st.image(foto, caption="Foto capturada", use_container_width=True)
-
+            
             with col2:
-                with st.spinner("Analisando imagem com OCR..."):
-                    img = Image.open(foto)
-                    textos_ocr = executar_ocr(img)
-
-                    if textos_ocr:
-                        st.markdown("**Texto detectado:**")
-                        for texto in textos_ocr:
-                            st.code(texto)
-
-                        codigo_detectado = extrair_codigo_ocr(textos_ocr)
-
-                        if codigo_detectado:
-                            st.markdown(
-                                '<div class="ocr-box"><h4>Codigo Detectado: <code>' + codigo_detectado + '</code></h4>'
-                                '<p>O sistema identificou este codigo na etiqueta!</p></div>',
-                                unsafe_allow_html=True
-                            )
-                            st.session_state.codigo_ocr = codigo_detectado
+                if TESSERACT_DISPONIVEL:
+                    with st.spinner("Analisando imagem com OCR..."):
+                        img = Image.open(foto)
+                        texto_ocr = executar_ocr(img)
+                        
+                        if texto_ocr:
+                            st.markdown("**Texto detectado:**")
+                            st.code(texto_ocr)
+                            
+                            codigo_detectado = extrair_codigo_ocr(texto_ocr)
+                            
+                            if codigo_detectado:
+                                st.markdown(
+                                    '<div class="ocr-box"><h4>Codigo Detectado: <code>' + codigo_detectado + '</code></h4>'
+                                    '<p>O sistema identificou este codigo na etiqueta!</p></div>',
+                                    unsafe_allow_html=True
+                                )
+                                st.session_state.codigo_ocr = codigo_detectado
+                            else:
+                                st.markdown(
+                                    '<div class="warning-box"><h4>Codigo nao reconhecido automaticamente</h4>'
+                                    '<p>Nao foi possivel extrair um codigo valido. Digite manualmente abaixo.</p></div>',
+                                    unsafe_allow_html=True
+                                )
                         else:
-                            st.markdown(
-                                '<div class="warning-box"><h4>Codigo nao reconhecido automaticamente</h4>'
-                                '<p>Nao foi possivel extrair um codigo valido. Digite manualmente abaixo.</p></div>',
-                                unsafe_allow_html=True
-                            )
-                    else:
-                        st.warning("Nenhum texto detectado na imagem. Tente novamente com melhor iluminacao.")
-
+                            st.warning("Nenhum texto detectado na imagem. Tente novamente com melhor iluminacao.")
+                else:
+                    st.info("OCR desabilitado. Digite o codigo manualmente abaixo.")
+        
         st.markdown("---")
         st.markdown("### Confirmar ou Digitar Codigo Manualmente")
-
+        
         busca = st.text_input(
             "Numero do Ativo:",
             value=st.session_state.codigo_ocr,
             placeholder="Ex: 00000333 ou 333"
         )
-
+        
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             if st.button("Limpar OCR e Tentar Novamente"):
                 st.session_state.codigo_ocr = ""
                 st.rerun()
-
+        
         if busca:
             alvo = normalizar(busca)
             item = df_atual[df_atual["Codigo do Bem"].astype(str).apply(normalizar) == alvo]
-
+            
             if not item.empty:
                 idx = item.index[0]
                 status_atual = item.at[idx, "Status"]
                 descricao = item.at[idx, "Descricao do Bem"]
                 codigo_completo = item.at[idx, "Codigo do Bem"]
-
+                
                 cor_status = "#10B981" if status_atual == "Auditado" else "#F59E0B"
                 st.markdown(
                     '<div class="success-box"><h4>Item Encontrado</h4>'
@@ -370,7 +379,7 @@ else:
                     '<p><strong>Status:</strong> <span style="color: ' + cor_status + '; font-weight: bold;">' + status_atual + '</span></p></div>',
                     unsafe_allow_html=True
                 )
-
+                
                 if status_atual == "Auditado":
                     st.info("Este item ja foi auditado!")
                     st.write(f"Data: {item.at[idx, 'Data Auditoria']}")
@@ -380,7 +389,7 @@ else:
                     obs = st.text_area("Observacoes (opcional):", placeholder="Ex: Bom estado, localizado no deposito...", height=80)
                     if st.button("CONFIRMAR AUDITORIA", type="primary"):
                         data_agora = pd.Timestamp.now().strftime("%d/%m/%Y %H:%M")
-
+                        
                         sucesso = salvar_item_supabase(
                             codigo_completo,
                             descricao,
@@ -389,12 +398,12 @@ else:
                             obs,
                             obra_id
                         )
-
+                        
                         if sucesso:
                             st.session_state.db.at[idx, "Status"] = "Auditado"
                             st.session_state.db.at[idx, "Data Auditoria"] = data_agora
                             st.session_state.db.at[idx, "Observacoes"] = obs
-
+                            
                             st.balloons()
                             st.success(f'"{descricao}" auditado com sucesso! Salvo na nuvem')
                             st.session_state.codigo_ocr = ""
@@ -406,7 +415,7 @@ else:
                     '<p>Este codigo nao existe no inventario atual.</p></div>',
                     unsafe_allow_html=True
                 )
-
+                
                 with st.expander("Cadastrar como Sobra"):
                     desc_sobra = st.text_input("Descricao da Sobra:", placeholder="Ex: Computador Dell Optiplex")
                     obs_sobra = st.text_area("Observacoes:", placeholder="Ex: Encontrado no escritorio 3...", height=60)
@@ -434,15 +443,15 @@ else:
     # ============================================================
     with tab2:
         st.markdown("### Inventario Completo")
-
+        
         df_lista = st.session_state.db
-
+        
         col_f1, col_f2 = st.columns(2)
         with col_f1:
             filtro_status = st.selectbox("Filtrar por Status:", ["Todos", "Pendente", "Auditado", "Sobra"])
         with col_f2:
             busca_texto = st.text_input("Buscar por descricao:", placeholder="Digite para filtrar...")
-
+        
         df_filtrado = df_lista.copy()
         if filtro_status != "Todos":
             if filtro_status == "Sobra":
@@ -451,20 +460,20 @@ else:
                 df_filtrado = df_filtrado[df_filtrado["Status"] == filtro_status]
         if busca_texto:
             df_filtrado = df_filtrado[df_filtrado["Descricao do Bem"].str.contains(busca_texto, case=False, na=False)]
-
+        
         def colorir_status(val):
             if val == "Auditado":
                 return "background-color: #ECFDF5; color: #065F46; font-weight: bold;"
             elif val == "Pendente":
                 return "background-color: #FFFBEB; color: #92400E; font-weight: bold;"
             return ""
-
+        
         st.dataframe(
             df_filtrado.style.applymap(colorir_status, subset=["Status"]),
             use_container_width=True,
             height=500
         )
-
+        
         st.caption(f"Mostrando {len(df_filtrado)} de {len(df_lista)} itens")
 
     # ============================================================
@@ -472,19 +481,19 @@ else:
     # ============================================================
     with tab3:
         st.markdown("### Dashboard da Auditoria")
-
+        
         df_dash = st.session_state.db
         total = len(df_dash)
-
+        
         if total == 0:
             st.info("Importe dados para ver o dashboard.")
         else:
             col1, col2, col3, col4 = st.columns(4)
-
+            
             auditados = len(df_dash[df_dash["Status"] == "Auditado"])
             pendentes = len(df_dash[df_dash["Status"] == "Pendente"])
             sobras = len(df_dash[df_dash["Descricao do Bem"].astype(str).str.contains("SOBRA", na=False)])
-
+            
             with col1:
                 st.metric("Total", total)
             with col2:
@@ -493,16 +502,16 @@ else:
                 st.metric("Pendentes", pendentes, f"-{pendentes/total*100:.1f}%")
             with col4:
                 st.metric("Sobras", sobras)
-
+            
             st.markdown("---")
             st.markdown("#### Progresso da Auditoria")
             progresso = auditados / total
             st.progress(progresso, text=f"{auditados} de {total} itens auditados ({progresso*100:.1f}%)")
-
+            
             st.markdown("---")
             st.markdown("#### Distribuicao por Status")
             st.bar_chart(df_dash["Status"].value_counts())
-
+            
             st.markdown("---")
             st.markdown("#### Ultimos Itens Auditados")
             ultimos = df_dash[df_dash["Status"] == "Auditado"].tail(5)
@@ -512,4 +521,38 @@ else:
                 st.info("Nenhum item auditado ainda.")
 
 st.markdown("---")
-st.caption("Estel Asset Manager v2.0 | Dados salvos no Supabase | OCR com RapidOCR")
+st.caption("Estel Asset Manager v2.0 | Dados salvos no Supabase | OCR com Tesseract")
+'''
+
+# Salvar
+with open('/mnt/agents/output/streamlit_app.py', 'w', encoding='utf-8') as f:
+    f.write(codigo_tesseract)
+
+# Validar
+import ast
+try:
+    ast.parse(codigo_tesseract)
+    print("✅ Codigo valido! Sem erros de sintaxe.")
+except SyntaxError as e:
+    print(f"❌ Erro de sintaxe: {e}")
+
+# Atualizar requirements
+requirements = """streamlit
+pandas
+openpyxl
+Pillow
+pytesseract
+supabase
+"""
+
+with open('/mnt/agents/output/requirements.txt', 'w') as f:
+    f.write(requirements)
+
+print("\n📦 Arquivos atualizados:")
+print("1. streamlit_app.py - Codigo com Tesseract OCR")
+print("2. requirements.txt - Sem opencv, com pytesseract")
+print("\n🔧 Mudancas:")
+print("- Removido rapidocr-onnxruntime (dependia de OpenCV)")
+print("- Adicionado pytesseract (OCR mais leve e estavel)")
+print("- OCR funciona mesmo se Tesseract nao estiver instalado (modo manual)")
+
