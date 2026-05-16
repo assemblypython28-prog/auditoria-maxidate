@@ -54,10 +54,8 @@ def carregar_do_supabase(obra_id="default"):
 def salvar_lote_supabase(df, obra_id="default"):
     """Salva DataFrame inteiro no Supabase de uma vez (MUITO mais rapido)."""
     try:
-        # Deleta dados antigos da obra
         supabase.table("inventario").delete().eq("obra_id", obra_id).execute()
 
-        # Prepara registros em lote
         registros = []
         for _, row in df.iterrows():
             registros.append({
@@ -69,7 +67,6 @@ def salvar_lote_supabase(df, obra_id="default"):
                 "observacoes": str(row.get("Observacoes", ""))
             })
 
-        # Insere em lote (max 1000 por vez)
         batch_size = 1000
         for i in range(0, len(registros), batch_size):
             batch = registros[i:i + batch_size]
@@ -246,7 +243,6 @@ with st.sidebar:
             if df_clean.empty:
                 st.error("Nenhum item valido encontrado no Excel.")
             else:
-                # Adiciona colunas de controle
                 df_clean["Status"] = "Pendente"
                 df_clean["Data Auditoria"] = ""
                 df_clean["Observacoes"] = ""
@@ -254,7 +250,6 @@ with st.sidebar:
                 total = len(df_clean)
                 st.info(f"Importando {total} itens... Isso pode levar alguns segundos.")
 
-                # Salva em LOTE (muito mais rapido!)
                 sucesso = salvar_lote_supabase(df_clean, obra_id)
 
                 if sucesso:
@@ -490,19 +485,8 @@ else:
         if busca_texto:
             df_filtrado = df_filtrado[df_filtrado["Descricao do Bem"].str.contains(busca_texto, case=False, na=False)]
 
-        def colorir_status(val):
-            if val == "Auditado":
-                return "background-color: #ECFDF5; color: #065F46; font-weight: bold;"
-            elif val == "Pendente":
-                return "background-color: #FFFBEB; color: #92400E; font-weight: bold;"
-            return ""
-
-        st.dataframe(
-            df_filtrado.style.applymap(colorir_status, subset=["Status"]),
-            use_container_width=True,
-            height=500
-        )
-
+        # Usa st.dataframe sem styling (compativel com todas as versoes)
+        st.dataframe(df_filtrado, use_container_width=True, height=500)
         st.caption(f"Mostrando {len(df_filtrado)} de {len(df_lista)} itens")
 
     # ============================================================
