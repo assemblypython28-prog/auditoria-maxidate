@@ -1,5 +1,4 @@
 streamlit
 streamlit-gsheets-connection
 pandas
-openpyxl
-pytesseract
+open
