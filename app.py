@@ -51,8 +51,37 @@ def carregar_do_supabase(obra_id="default"):
         st.error(f"Erro ao carregar do banco: {e}")
         return pd.DataFrame(columns=["Codigo do Bem", "Descricao do Bem", "Status", "Data Auditoria", "Observacoes"])
 
+def salvar_lote_supabase(df, obra_id="default"):
+    """Salva DataFrame inteiro no Supabase de uma vez (MUITO mais rapido)."""
+    try:
+        # Deleta dados antigos da obra
+        supabase.table("inventario").delete().eq("obra_id", obra_id).execute()
+
+        # Prepara registros em lote
+        registros = []
+        for _, row in df.iterrows():
+            registros.append({
+                "obra_id": obra_id,
+                "codigo": str(row["Codigo do Bem"]),
+                "descricao": str(row["Descricao do Bem"]),
+                "status": str(row.get("Status", "Pendente")),
+                "data_auditoria": str(row.get("Data Auditoria", "")),
+                "observacoes": str(row.get("Observacoes", ""))
+            })
+
+        # Insere em lote (max 1000 por vez)
+        batch_size = 1000
+        for i in range(0, len(registros), batch_size):
+            batch = registros[i:i + batch_size]
+            supabase.table("inventario").insert(batch).execute()
+
+        return True
+    except Exception as e:
+        st.error(f"Erro ao salvar lote no banco: {e}")
+        return False
+
 def salvar_item_supabase(codigo, descricao, status="Pendente", data_aud="", obs="", obra_id="default"):
-    """Salva ou atualiza um item no Supabase."""
+    """Salva ou atualiza um item no Supabase (para auditoria individual)."""
     try:
         response = supabase.table("inventario").select("id").eq("codigo", str(codigo)).eq("obra_id", obra_id).execute()
 
@@ -210,30 +239,31 @@ with st.sidebar:
     arquivo = st.file_uploader("Selecionar ficheiro", type=["xlsx", "xls"])
     if arquivo is not None:
         try:
-            df_raw = pd.read_excel(arquivo, header=None)
-            df_clean = limpar_excel(df_raw)
+            with st.spinner("Processando Excel..."):
+                df_raw = pd.read_excel(arquivo, header=None)
+                df_clean = limpar_excel(df_raw)
 
             if df_clean.empty:
                 st.error("Nenhum item valido encontrado no Excel.")
             else:
-                progress_bar = st.progress(0)
+                # Adiciona colunas de controle
+                df_clean["Status"] = "Pendente"
+                df_clean["Data Auditoria"] = ""
+                df_clean["Observacoes"] = ""
+
                 total = len(df_clean)
+                st.info(f"Importando {total} itens... Isso pode levar alguns segundos.")
 
-                for i, (_, row) in enumerate(df_clean.iterrows()):
-                    salvar_item_supabase(
-                        row["Codigo do Bem"],
-                        row["Descricao do Bem"],
-                        "Pendente",
-                        "",
-                        "",
-                        obra_id
-                    )
-                    progress_bar.progress((i + 1) / total)
+                # Salva em LOTE (muito mais rapido!)
+                sucesso = salvar_lote_supabase(df_clean, obra_id)
 
-                st.session_state.db = carregar_do_supabase(obra_id)
-                st.success(f"{total} itens importados para obra: {obra_id}")
-                time.sleep(1)
-                st.rerun()
+                if sucesso:
+                    st.session_state.db = carregar_do_supabase(obra_id)
+                    st.success(f"{total} itens importados para obra: {obra_id}")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("Erro ao importar. Tente novamente.")
 
         except Exception as e:
             st.error(f"Erro ao importar: {e}")
@@ -521,4 +551,3 @@ else:
 
 st.markdown("---")
 st.caption("Estel Asset Manager v2.0 | Dados salvos no Supabase | OCR com Tesseract")
-
