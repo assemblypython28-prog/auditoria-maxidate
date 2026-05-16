@@ -2,6 +2,5 @@ streamlit
 pandas
 openpyxl
 Pillow
-opencv-python-headless
-rapidocr-onnxruntime
+pytesseract
 supabase
